@@ -1,6 +1,6 @@
-post_bm_res <- function(bm_res) {
-  bm_res <-
-    bm_res %>%
+post_error_table <- function(error_tables) {
+  error_tables <-
+    error_tables %>%
     # { .[!stringr::str_detect(names(.), 'kpca_(comb|6434)')] } %>%
     # { .[!stringr::str_detect(names(.), 'kpca')] } %>%
     purrr::discard(is.null) %>%
@@ -17,7 +17,7 @@ post_bm_res <- function(bm_res) {
       }
       return(out)
     })
-  return(bm_res)
+  return(error_tables)
 }
 
 
@@ -45,150 +45,52 @@ if (F) {
 }
 
 
-rank_weights <- list(
-  'TNFa_CI' =
-    list(
-      frac_Nhoods_retained_p = 2,
-      tnf_conc_CI_h_p = 100,
-      tnf_conc_p = 10,
-      ifn_conc_p = 10,
-      duration_p = 10
-    ),
-  'TNFa_CI_max_Nhoods' =
-    list(
-      frac_Nhoods_retained_p = 1,
-      tnf_conc_CI_h_p = 100
-    ),
-  'duration_CI' =
-    list(
-      frac_Nhoods_retained_p = 5,
-      duration_CI_h_p = 100,
-      tnf_conc_p = 10,
-      ifn_conc_p = 10,
-      duration_p = 10
-    )
-  ) %>%
-  purrr::map(function(obj) {
-    all_parms <- c('frac_Nhoods_retained_p',
-      'duration_CI_l_p', 'tnf_conc_CI_l_p', 'ifn_conc_CI_l_p',
-      'duration_p', 'tnf_conc_p', 'ifn_conc_p',
-      'duration_CI_h_p', 'tnf_conc_CI_h_p', 'ifn_conc_CI_h_p')
-    missing_parms <- setdiff(all_parms, names(obj))
-    c(obj, map(auto_name(missing_parms), ~0))
-  })
-
-
-rank_funs <- map(rank_weights, function(penalty_weights) {
-  force(penalty_weights)
-  out <- function(obj) {
-    penalty <-
-      setdiff(names(obj), 'frac_Nhoods_retained_p') %>%
-      intersect(stringr::str_replace(names(penalty_weights),
-          '_p', '')) %>%
-      intersect(colnames(obj)) %>%
-      auto_name() %>%
-      purrr::map_dfc(function(cn) {
-        w <- penalty_weights[[glue::glue('{cn}_p')]]
-        if (w > 0) {
-          return(obj[[cn]] * w)
-        } else {
-          return(NULL)
-        }
-      }) %>%
-      # purrr::reduce(`*`) %>%
-      rowMeans() %>%
-      { . }
-    exp(-penalty_weights$frac_Nhoods_retained_p * 
-      obj$frac_Nhoods_retained) * penalty
-  }
-  class(out) <- c('rank_fun', class(out))
-  return(out)
-})
-
-
-if (F) {
-  #' 
-  #'
-  #'
-  as.character.rank_fun <- function(obj, sep='-', sub_print_names = F) {
-    penalty_weights <- environment(obj)$penalty_weights %>%
-      purrr::keep(~!is.na(.x) && .x > 0)
-    names(penalty_weights) <-
-      stringr::str_replace(names(penalty_weights), '_p', '')
-    # if (sub_print_names) {
-    #   names(penalty_weights) <- DISTINCT_p_names
-    # }
-    imap_chr(penalty_weights, ~glue('{sep}{.y}={.x}')) %>%
-      paste0(collapse = '')
-  }
-  # glue('{rank_funs[[1]]}')
-  # as.character(rank_funs[[1]], ' ')
-}
-
-
-#' Print a human-friendly version of a ranking function 
-#'
-#' @param obj List of parameters
-#'
-#' @export
-print.rank_fun <- function(obj) {
-  penalty_weights <- environment(obj)$penalty_weights %>%
-    purrr::keep(~!is.na(.x) && .x > 0)
-  cat('DISTINCT benchmark ranking function:\n')
-  for (cn in names(penalty_weights)) {
-    cn_p <- stringr::str_replace(cn, '_p', '')
-    cat('  ', cn_p, ':', penalty_weights[[cn]], '\n')
-  }
-}
-# print(rank_funs[[1]])
-
-
-sort_bm_res <- function(
-  bm_res,
+sort_error_tables <- function(
+  error_tables,
   filtering_fun = filtering_funs[[1]],
   rank_fun = rank_funs[['TNFa_duration']]) {
 
-  if ('gamma_D' %in% colnames(bm_res) && 
-      !'ltb' %in% colnames(bm_res)) {
-    bm_res <- dplyr::rename(bm_res, ltb = gamma_D)
+  if ('gamma_D' %in% colnames(error_tables) && 
+      !'ltb' %in% colnames(error_tables)) {
+    error_tables <- dplyr::rename(error_tables, ltb = gamma_D)
   }
 
-  bm_res <- filtering_fun(bm_res)
-  scores <- rank_fun(bm_res)
+  error_tables <- filtering_fun(error_tables)
+  scores <- rank_fun(error_tables)
   entry_ord <- order(scores, decreasing = FALSE)
 
   if (FALSE) {
     scores[entry_ord]
-    cor(entry_ord, bm_res$mean_error[entry_ord], 
+    cor(entry_ord, error_tables$mean_error[entry_ord], 
       method = 'spearman')
-    cor(entry_ord, bm_res$mean_error, method = 'spearman')
-    cor(1:length(entry_ord), bm_res$mean_error[entry_ord], 
+    cor(entry_ord, error_tables$mean_error, method = 'spearman')
+    cor(1:length(entry_ord), error_tables$mean_error[entry_ord], 
       method = 'spearman')
     scores[rev(entry_ord)]
-    bm_res[rev(entry_ord), ]
-    bm_res[entry_ord[1:5], ]
+    error_tables[rev(entry_ord), ]
+    error_tables[entry_ord[1:5], ]
   }
 
-  bm_res[entry_ord, ]
+  error_tables[entry_ord, ]
 }
 
 
 #' Reduce a large set of benchmarking results to 1 setting per
 #' combination of tier 1 parameters
 #' 
-#' @param bm_res A list of benchmarking results
+#' @param error_tables A list of benchmarking results
 #' @param include_non_hl Also include non-highlighted tier 2 setings.
 #' This setting will add he 'hl' column to the function's output.
 #' @param filtering_fun Function to pre-filter benchmarking results
 #' with
 #' @param rank_fun Function to rank benchmarking results with
 #'
-#' @return An ordered tibble of benchmarking result of class
-#' 'DISTINCT_bm_summary'
+#' @return An ordered tibble of benchmarking results of class
+#' 'error_tables_summary'
 #'
 #' @export
-summarize_bm_res <- function(
-  bm_res,
+summarize_error_tables <- function(
+  error_tables,
   include_non_hl = FALSE,
   mod_names = FALSE,
   filtering_fun = filtering_funs[[1]],
@@ -197,19 +99,9 @@ summarize_bm_res <- function(
   ## Aggregate a bunch of individual benchmarks (each for one set of
   ## tier 1 params)
   bm_res_flat <-
-    purrr::imap_dfr(bm_res, function(.x, .y) {
-      # settings_meta <- map_dfr(names(bm_res), subset_grid_dtf)
-      ## TODO portability
-      if (stringr::str_detect(.y, 'kpca')) {
-        settings_meta <- subset_grid_dtf(.y, grid_dtf = NH_kpca_grid)
-      } else {
-        settings_meta <- subset_grid_dtf(.y, grid_dtf = NH_t_grid)
-      }
-      if (null_dat(settings_meta)) return(NULL)
-      if (nrow(settings_meta) > 1) browser()
+    purrr::imap_dfr(error_tables, function(.x, .y) {
       dplyr::select(.x, everything()) %>%
         dplyr::mutate(name = .y) %>%
-        { dplyr::bind_cols(settings_meta, .) } %>%
         { . }
     })
 
@@ -221,7 +113,7 @@ summarize_bm_res <- function(
 
   ## Sort the aggregate and reduce to one row per tier1 setting
   out <-
-    sort_bm_res(bm_res_flat, rank_fun = rank_fun) %>%
+    sort_error_tables(bm_res_flat, rank_fun = rank_fun) %>%
     dplyr::distinct(name, .keep_all = TRUE) %>%
     dplyr::mutate(hl_index = 1:n())
 
@@ -241,7 +133,7 @@ summarize_bm_res <- function(
     max(out$N_non_zero_SC_conditions, na.rm = T)
   out$frac_conditions_retained[is.na(out$frac_conditions_retained)] <- 0
 
-  class(out) <- c('DISTINCT_bm_summary', class(out))
+  class(out) <- c('error_tables_summary', class(out))
   return(out)
 }
 
@@ -251,29 +143,29 @@ summarize_bm_res <- function(
 #'
 #' @export
 extract_best <- function(
-  bm_res = NULL,
-  bm_res_sum = NULL,
+  error_tables = NULL,
+  error_tables_sum = NULL,
   filtering_fun = filtering_funs[[1]],
   rank_fun = rank_funs[[1]],
   tier1_rank = 1L) {
 
-  stopifnot(xor(is.null(bm_res), is.null(bm_res_sum)))
+  stopifnot(xor(is.null(error_tables), is.null(error_tables_sum)))
 
-  if (is.null(bm_res_sum) && !is.null(bm_res)) {
-    bm_res_sum <- summarize_bm_res(
-      bm_res,
+  if (is.null(error_tables_sum) && !is.null(error_tables)) {
+    error_tables_sum <- summarize_error_tables(
+      error_tables,
       rank_fun = rank_fun,
       filtering_fun = filtering_fun
     )
   }
 
-  tier1_rank <- min(tier1_rank, nrow(bm_res_sum))
+  tier1_rank <- min(tier1_rank, nrow(error_tables_sum))
 
-  optimal_tier1 <- bm_res_sum$name[tier1_rank]
+  optimal_tier1 <- error_tables_sum$name[tier1_rank]
 
   ## What are the associated tier2 settings?
   optimal_tier2 <-
-    bm_res_sum %>%
+    error_tables_sum %>%
     dplyr::slice(tier1_rank) %>%
     # dplyr::right_join(tibble(name = optimal_tier1), by = 'name') %>%
     dplyr::select(any_of(c('kernel', 'log_gamma', 'ltb'))) %>%
@@ -281,7 +173,7 @@ extract_best <- function(
     { . }
 
   agg_error <-
-    bm_res_sum %>%
+    error_tables_sum %>%
     dplyr::slice(tier1_rank) %>%
     # dplyr::right_join(tibble(name = optimal_tier1), by = 'name') %>%
     dplyr::select(matches('error|_IZ$|conc')) %>%
@@ -304,17 +196,26 @@ extract_best <- function(
 #'
 #' @export
 DISTINCT <- function(
-  bm_res = NULL,
-  bm_res_sum = NULL,
+  error_tables = NULL,
+  error_tables_sum = NULL,
   rank_fun = rank_funs[['TNFa_duration']],
   filtering_fun = filtering_funs[[1]],
   lookup_hyperparams_f = lookup_tier1,
+  exclusion_affinity_bms = 
+    attr(error_tables[[1]], 'exclusion_affinity_bms') %||% 
+    eval(formals(compute_error_estimates)$exclusion_affinity_bms),
+  primary_ref_samples = 
+    attr(error_tables[[1]], 'primary_ref_samples') %||% 
+    eval(formals(compute_error_estimates)$primary_ref_samples),
   # settings_grid = exp6369_grid,
   settings_grid = NH_t_grid,
+
+  error_level_computation = 'conditions',
+  ref_weights = 'none',
   tier1_rank = 1L,
   plot_id = NULL) {
 
-  stopifnot(xor(is.null(bm_res), is.null(bm_res_sum)))
+  stopifnot(xor(is.null(error_tables), is.null(error_tables_sum)))
   stopifnot(!is.null(rank_fun) || !is.function(rank_fun))
 
   obj <- list()
@@ -322,22 +223,9 @@ DISTINCT <- function(
   if (!is.null(plot_id))
     obj$plot_id <- plot_id
 
-  if (!is.null(bm_res_sum)) {
-    obj$bm_res_sum <- bm_res_sum
-  } else {
-    if (!is.null(bm_res)) {
-      obj$bm_res_sum <- summarize_bm_res(
-        bm_res,
-        rank_fun = rank_fun,
-        mod_names = FALSE,
-        filtering_fun = filtering_fun
-      )
-    }
-  }
-
   obj$hyperparams <- extract_best(
-    bm_res = bm_res,
-    bm_res_sum = obj$bm_res_sum,
+    error_tables = error_tables,
+    error_tables_sum = error_tables_sum,
     rank_fun = rank_fun,
     filtering_fun = filtering_fun,
     tier1_rank = tier1_rank
@@ -457,25 +345,42 @@ DISTINCT <- function(
 
   if (F) {
     obj$sce
-    as_nrs(obj)
+    as_NhoodRefSim(obj)
     class(obj)
     saveRDS(obj, file.path(rds_dir, 'DISTINCT_test.rds'))
     # obj <- readRDS(file.path(rds_dir, 'DISTINCT_test.rds'))
   }
-  agg_error <- as_nrs.DISTINCT(obj)
-  agg_error <- as_nrs(obj)$agg_Nhood_error()
-  Nhood_importance_weights <- colSums(agg_error$CM)
-
-  obj$dtf$Nhood_importance_weights <-
-    c(
-      ## This assumes the reference to be the first rows in dtf
-      # rep(NA_real_, table(obj$dtf$experiment)[1]),
-      rep(NA_real_, rle(obj$dtf$experiment)$lengths[1]),
-      Nhood_importance_weights
+  # agg_error <- as_nrs.DISTINCT(obj)
+  
+  agg_error <- purrr::map(c('none', 'ref_reconstruction'), 
+    function(elc) {
+    agg_error <- compute_error(
+      obj,
+      ref_weights = ref_weights,
+      error_level_computation = elc, 
+      exclusion_affinity_bms = exclusion_affinity_bms,
+      primary_ref_samples = primary_ref_samples
     )
 
-  obj$dtf$Nhood_bandwidth_weights <-
-    obj$dtf$Nhood_importance_weights / obj$dtf$N
+    if (FALSE) {
+      if ('CM' %in% names(agg_error)) {
+        Nhood_importance_weights <- colSums(agg_error$CM)
+      
+        obj$dtf[[glue::glue('Nhood_importance_weights_{elc}')]] <-
+          c(
+            ## This assumes the reference to be the first rows in dtf
+            # rep(NA_real_, table(obj$dtf$experiment)[1]),
+            rep(NA_real_, rle(obj$dtf$experiment)$lengths[1]),
+            Nhood_importance_weights
+          )
+      
+        obj$dtf$Nhood_bandwidth_weights <-
+          obj$dtf$Nhood_importance_weights / obj$dtf$N
+      }
+    }
+  })
+
+  obj$agg_error <- agg_error
 
   return(obj)
 }
@@ -505,45 +410,6 @@ print.DISTINCT <- function(obj) {
 test_error <- function(...) UseMethod('test_error')
 
 
-#' 
-#'
-#' @export
-as_nrs <- function(...) UseMethod('as_nrs')
-
-
-#' Convert a DISTINCT object to a nrs (NhoodRefSim sample) object 
-#'
-#' @export
-as_nrs.DISTINCT <- function(
-  obj,
-  ltb = obj$hyperparams$tier2$ltb,
-  primary_ref_samples = 
-    eval(formals(gamma_tit_error_estimates)$primary_ref_samples),
-  exclusion_affinity_bms = 
-    eval(formals(gamma_tit_error_estimates)$exclusion_affinity_bms)) {
-
-  nrs <- NhoodRefSim$new(
-    dtf = obj$dtf,
-    sce = obj$sce,
-    query = SummarizedExperiment::colData(obj$sce)$exp[1],
-    primary_ref_samples = primary_ref_samples,
-    exclusion_affinity_bms = exclusion_affinity_bms,
-    ref_sa =
-      obj$ref_so@meta.data %>%
-      dplyr::select(any_of(c('sample_name')), stim_group,
-        duration, condition_name, matches('conc|dilution')) %>%
-      # { set_rownames(., tolower(.$sample_name)) } %>%
-      order_duration() %>%
-      dplyr::select(-stim_group) %>%
-      { . },
-    ref_experiment = obj$ref_so@meta.data$experiment[1],
-    ltb = ltb
-  )
-
-  return(nrs)
-}
-
-
 #' Make all DISTINCT plots
 #'
 #' @export
@@ -554,7 +420,7 @@ plot.DISTINCT <- function(
   plot_id = get_plot_id(obj)) {
 
   dir.create(out_dir, showWarnings = FALSE)
-  nrs <- as_nrs(obj, ltb = ltb)
+  nrs <- as_NhoodRefSim(obj, ltb = ltb)
 
   if (F) {
     nrs$plot_gamma_titration_Nhood_retention(
@@ -568,19 +434,19 @@ plot.DISTINCT <- function(
   }
 
   if (F) {
-    # nrs$agg_Nhood_error(scale_by_max_aff = TRUE)
+    # nrs$compute_error(scale_by_max_aff = TRUE)
     # nrs$plot_prediction_error_mat(
     #   out_dir = out_dir,
     #   fn_app = glue::glue('{plot_id}-scale_by_max_aff')
     # )
-    nrs$agg_Nhood_error(scale_by_max_aff = FALSE)
+    nrs$compute_error(scale_by_max_aff = FALSE)
     nrs$plot_prediction_error_mat(
       fn_app = glue::glue('{plot_id}'),
       out_dir = out_dir
     )
 
     min_Nhood_size = 50L
-    nrs$agg_Nhood_error(scale_by_max_aff = FALSE,
+    nrs$compute_error(scale_by_max_aff = FALSE,
       min_Nhood_size = min_Nhood_size)
     nrs$plot_prediction_error_mat(
       fn_app = glue::glue('{plot_id}{make_flag(min_Nhood_size)}'),
@@ -606,7 +472,7 @@ DISTINCT_p_names <- c(
 
 
 hl_settings_heatmap <- function(
-  bm_res_sum,
+  error_tables_sum,
   max_rows = 100L,
   vis_vars = c('ifn_conc', 'tnf_conc', 'duration',
     'frac_Nhoods_retained', 'frac_cells_retained'),
@@ -615,23 +481,25 @@ hl_settings_heatmap <- function(
   of = file.path(out_dir,
     glue::glue('optimal_settings.pdf'))) {
 
-  if ('hl' %in% colnames(bm_res_sum) && any(bm_res_sum$hl ==
-      'Highlight setting')) {
-    bm_res_sum <- bm_res_sum %>%
+  if ('hl' %in% colnames(error_tables_sum) && 
+      any(error_tables_sum$hl == 'Highlight setting')) {
+    error_tables_sum <- error_tables_sum %>%
       dplyr::filter(hl == 'Highlight setting')
   }
-  bm_res_sum <- bm_res_sum[!is.na(bm_res_sum$name), ]
+  error_tables_sum <- 
+    error_tables_sum[!is.na(error_tables_sum$name), ]
   if (!is.null(max_rows)) {
-    bm_res_sum <- bm_res_sum[1:min(max_rows, nrow(bm_res_sum)), ]
+    error_tables_sum <- 
+      error_tables_sum[1:min(max_rows, nrow(error_tables_sum)), ]
   }
-  # bm_res_sum$frac_Nhoods_retained
+  # error_tables_sum$frac_Nhoods_retained
 
-  vis_vars <- intersect(vis_vars, colnames(bm_res_sum))
+  vis_vars <- intersect(vis_vars, colnames(error_tables_sum))
 
   ## Table of tier 1 parameters
   settings_comp <-
-    bm_res_sum %>%
-    # dplyr::pull(bm_res_sum, name) %>%
+    error_tables_sum %>%
+    # dplyr::pull(error_tables_sum, name) %>%
     # purrr::map_dfr(subset_grid_dtf, grid_dtf = grid_dtf) %>%
     { stopifnot(nrow(.) > 0); . } %>%
     # dplyr::select(-any_of(c('NH_gamma_titration_embedding_obj'))) %>%
@@ -643,11 +511,10 @@ hl_settings_heatmap <- function(
     #   as.character(NH_gamma_titration_embedding_obj)) %>%
     # dplyr::mutate(name =
     #   as.character(NH_Nhood_error_obj)) %>%
-    # dplyr::inner_join(bm_res_sum, by = 'name') %>%
+    # dplyr::inner_join(error_tables_sum, by = 'name') %>%
     dplyr::select(-any_of(c('NH_gamma_titration_embedding_obj',
           'NH_Nhood_error_obj',
           'name', 'global_tnfa_conc_min', 'd', 'N_PV'))) %>%
-    # bind_cols(bm_res_sum)
     { . }
 
   ## Remove 'constant' columns
@@ -868,8 +735,8 @@ hl_settings_heatmap <- function(
 
 
 test_DISTINCT_cache <- function(ds) {
-  nrs <- as_nrs(ds)
-  nrs$agg_Nhood_error(
+  nrs <- as_NhoodRefSim(ds)
+  nrs$compute_error(
     ltb = ds$hyperparams$tier2$ltb,
     min_Nhood_size = ds$hyperparams$tier2$min_Nhood_size
   )
@@ -880,12 +747,12 @@ test_DISTINCT_cache <- function(ds) {
 }
 
 
-#' Print an object of the DISTINCT_bm_summary class
+#' Print an object of the error_tables_summary class
 #' 
-#' @param obj A DISTINCT_bm_summary object
+#' @param obj A error_tables_summary object
 #' 
 #' @export 
-print.DISTINCT_bm_summary <- function(obj) {
+print.error_tables_summary <- function(obj) {
   cat('DISTINCT benchmark summary:\n')
   cat('  reference: ', obj$reference[1], '\n')
   cat('  query: ', obj$query[1], '\n')
@@ -901,15 +768,16 @@ settings_scatter <- function(...) UseMethod('settings_scatter')
 
 #' Plot a scatter of all statistics for a summary of settings
 #'
-#' @param bm_res_sum A DISTINCT_bm_summary object
+#' @param error_tables_sum A error_tables_summary object
 #' @param of Output file, where to store the plot
 #'
 #' @export
-settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
+settings_scatter.error_tables_summary <- function(
+  error_tables_sum,
   of = NULL) {
 
-  if (is.null(bm_res_sum$hl)) {
-    bm_res_sum$hl <- 'none'
+  if (is.null(error_tables_sum$hl)) {
+    error_tables_sum$hl <- 'none'
   }
 
   plots <-
@@ -929,7 +797,7 @@ settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
     purrr::pmap(function(x_var, y_var, type) {
       if (type == 'scatter') {
         p <-
-          bm_res_sum %>%
+          error_tables_sum %>%
           dplyr::arrange(desc(hl)) %>%
           ggplot(aes_string(x = x_var, y = y_var,
             label = 'hl_index', alpha = 'hl', size = 'hl',
@@ -937,7 +805,7 @@ settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
           xlab(DISTINCT_p_names[x_var]) +
           ylab(DISTINCT_p_names[y_var]) +
           # geom_point(data = bm_res_flat, color = 'grey50', alpha = .5) +
-          # geom_point(data = bm_res_sum, color = 'indianred3', size = 3, alpha = .5)
+          # geom_point(data = error_tables_sum, color = 'indianred3', size = 3, alpha = .5)
           scale_colour_manual(name = 'Highlighted setting',
             values = c(
               'Highlight setting' = 'indianred3',
@@ -948,7 +816,7 @@ settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
             values = c('Highlight setting' = .7, 'none' = .2)) +
           ggrastr::rasterise(geom_point(), dpi = 300) +
           ggrepel::geom_text_repel(
-            data = dplyr::filter(bm_res_sum, !is.na(hl_index)),
+            data = dplyr::filter(error_tables_sum, !is.na(hl_index)),
             min.segment.length = 0,
             max.iter = 1e9,
             force = 10,
@@ -957,7 +825,7 @@ settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
           theme()
       } else if (type == 'boxplot') {
         p <-
-          bm_res_sum %>%
+          error_tables_sum %>%
           dplyr::mutate(x_var = numeric2factor(.data[[x_var]])) %>%
           dplyr::filter(mean_error <= 1) %>%
           ggplot(aes_string(x = 'x_var', y = y_var)) +
@@ -996,121 +864,4 @@ settings_scatter.DISTINCT_bm_summary <- function(bm_res_sum,
     filename = of)
 
   return(invisible(of))
-}
-
-
-#' Deprecated
-#'
-#'
-make_all_plots <- function(query) {
-  out_dir <- file.path(Sys.getenv('img_dir'),
-    glue::glue('exp{query}_TRANSACT'))
-  dir.create(out_dir, showWarnings = F)
-
-  bm_res <-
-    tar_read_regex(
-      regex = glue::glue('NH_Nhood_error_.*_{query}\\
-        .*(mallow|linear|rbf|cosine).*'),
-      min_date = '2022-07-08 12:00:00 CEST'
-    )
-
-  bm_res <-
-    purrr::map(bm_res, function(x)
-      dplyr::filter(x, !is.na(duration_IZ)) %>%
-      dplyr::mutate(global_error_min =
-        min(mean_error[!is.na(duration_IZ)]))
-    )
-
-  for (i in 1:length(rank_funs)) {
-    l_out_dir <- file.path(out_dir, names(rank_funs)[i])
-    dir.create(l_out_dir, showWarnings = F)
-
-    bm_res_sum <-
-      summarize_bm_res(
-        bm_res,
-        rank_fun = rank_funs[[i]],
-        filtering_fun = filtering_funs[[1]],
-        include_non_hl = TRUE
-      )
-
-    D_obj <- DISTINCT(bm_res_sum = bm_res_sum)
-
-    hl_settings_heatmap(
-      bm_res_sum = dplyr::filter(bm_res_sum,
-        hl == 'Highlight setting'),
-      max_rows = 100L,
-      vis_vars = c(
-        # 'duration_IZ',
-        'duration',
-        # 'tnf_conc_IZ',
-        'tnf_conc',
-        # 'ifn_conc_IZ',
-        'ifn_conc',
-        # 'frac_conditions_retained',
-        'frac_Nhoods_retained',
-        'frac_cells_retained',
-        NULL),
-      of = file.path(l_out_dir,
-        glue::glue('optimal_settings_{names(rank_funs)[i]}.pdf'))
-    )
-
-    walk(unique(bm_res_sum$kernel), function(kernel) {
-      t_dat <- dplyr::filter(bm_res_sum, kernel == .env[['kernel']])
-      settings_scatter(
-        bm_res_sum = t_dat,
-        of = file.path(l_out_dir,
-          glue::glue('error_marginal_{names(rank_funs)[i]}\\
-            {make_flag(kernel)}.pdf'))
-      )
-    })
-
-    plot_gamma_titration_Nhood_retention(
-      D_obj,
-      plot_id = names(rank_funs)[i],
-      out_dir = l_out_dir
-    )
-
-    plot_prediction_error_mat(
-      D_obj,
-      plot_id = names(rank_funs)[i],
-      out_dir = l_out_dir
-    )
-
-    if (interactive() && !test_rendering())
-      source('~/MirjamHoekstra/R/init.R')
-    plot_ref_mds(
-      D_obj,
-      include_query = TRUE,
-      plot_id = names(rank_funs)[i],
-      out_dir = l_out_dir
-    )
-
-  }
-}
-
-
-plot_reference_compression <- function(obj) {
-  sa <- extract_sa(extract_ref_dtf(obj$dtf),
-    meta_fields = c('condition_name', 'stim_group', 'duration')
-  )
-  p_dat <- ref_reconstruction %>%
-    dplyr::left_join(sa, by = 'condition_name') %>%
-    dplyr::mutate(log_gamma = round(log_gamma, 2)) %>%
-    dplyr::filter(log_gamma %in% unique(log_gamma)[1:3])
-
-  p <-
-    p_dat %>%
-    ggplot(aes(x = 1/NLPC, y = 1/CF, colour = stim_group, shape = duration)) +
-    geom_abline(slope = 1, intercept = 0) +
-    geom_point(alpha = 1) +
-    scale_colour_stim_group(p_dat) +
-    xlab('Mean distance to unstimulated\nsamples in NLPC space') +
-    ylab('Mean distance to unstimulated\nsamples in CF space') +
-    scale_shape_duration(p_dat) +
-    guides(color = guide_legend(ncol = 2)) +
-    facet_wrap(~log_gamma)
-  print_plot_eval(print(p),
-    width = 17.4, height = 10,
-    filename = file.path(out_dir,
-      glue::glue('ref_compression.pdf')))
 }

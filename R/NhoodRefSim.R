@@ -18,11 +18,10 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
   #' absent.
   #' @param exclusion_affinity_bms
   #' @param primary_ref_samples
-  #' @param ref_reconstruction
+  #' @param ref_factors Reference-specific factors to weight the query
+  #' to reference distances by
   #' @param N_PV
-  #' @param MEV_q
   #' @param ltb
-  #' @param cluster_h_q
   #' @param ref_CF_clustering
   #'
   #' @export
@@ -40,13 +39,11 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
     ref_experiment = ref_sa$experiment[1],
     primary_ref_samples = list(),
     exclusion_affinity_bms = list(),
-    ref_reconstruction = NULL,
+    ref_factors = NULL,
     N_PV = NULL,
-    MEV_q = NULL,
     ## 'Label transfer bandwidth', parameter of the exponential
     ## label transfer similarity function
     ltb = NULL,
-    cluster_h_q = NULL,
     ref_CF_clustering = NULL,
     ...) {
 
@@ -59,8 +56,8 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
     stopifnot(is.null(primary_ref_samples) ||
       is.list(primary_ref_samples))
 
-    self$ref_reconstruction <- ref_reconstruction
-    # stopifnot(!null_dat(self$ref_reconstruction))
+    self$ref_factors <- ref_factors
+    # stopifnot(!null_dat(self$ref_factors))
     self$dtf <- dtf
     self$sce <- sce
     self$Nhood_size <- 
@@ -73,9 +70,7 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
       order_concentration() %>%
       arrange(across(
           any_of(c('condition_name', 'stim_group', 'duration'))))
-    self$MEV_q <- MEV_q
     self$ltb <- ltb
-    self$cluster_h_q <- cluster_h_q
     self$ref_CF_clustering <- ref_CF_clustering
     self$dtf <- order_duration(self$dtf)
     self$query_M <- self$dtf %>%
@@ -224,289 +219,7 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
     return(affM)
   },
 
-  agg_Nhood_error = function(
-    # reg_vars = c('duration',
-    #   'ifn_conc', 'ifn_conc_bin', 'tnf_conc', 'tnf_conc_bin'),
-    ltb = self$ltb,
-    reg_vars = c('duration', 'ifn_conc', 'tnf_conc'),
-    by_var = 'condition_name',
-    min_Nhood_size = NULL,
-    scale_by_max_aff = FALSE,
-    ref_weights = 'none',
-    include_bs_pres = FALSE,
-    verbose = F) {
-
-    ref_weights <- match.arg(ref_weights,
-      choices = c('none', 'uniqueness', 'ref_reconstruction'))
-
-    library(SingleCellExperiment)
-
-    ref_dtf <- extract_ref_dtf(self$dtf)
-    ref_M <- extract_CF_M(ref_dtf)
-    query_dtf <- extract_query_dtf(self$dtf)
-    query_M <- extract_CF_M(query_dtf)
-
-    # self$compute_affM(ltb = ltb)
-    query_sa <-
-      SummarizedExperiment::colData(self$sce) %>%
-      as.data.frame() %>%
-      set_rownames(NULL) %>%
-      extract_sa(meta_fields = c(by_var, reg_vars, 'condition_i')) %>%
-      dplyr::distinct() %>%
-      # order_condition_name() %>%
-      dplyr::arrange(condition_i) %>%
-      numerify_regressors() %>%
-      norm_regressors() %>% {
-        if (self$query == '6369') {
-          .$tnf_conc <- 0
-        }
-        .
-      } %>%
-      add_binary_regressors(regressor_vars = reg_vars) %>%
-      {
-        if (all(c('duration', 'tnf_conc', 'ifn_conc') %in%
-            colnames(.))) {
-          . <- dplyr::mutate(., duration =
-            if_else(ifn_conc == 0 & tnf_conc == 0, NA_real_, duration))
-        }
-        .
-      } %>%
-      dplyr::select(-any_of(c('duration_bin'))) %>%
-      # debug_pipe() %>%
-      # {
-      #   idxs <-
-      #     match(
-      #       levels(SummarizedExperiment::colData(sce)$condition_name),
-      #       as.character(.$condition_name)
-      #     )
-      #   .[idxs, ] } %>%
-      { . }
-
-    ## Condition names of the query experiment
-    query_cn <-
-      query_sa[, c('condition_i', 'condition_name')] %>%
-      dplyr::distinct() %>%
-      dplyr::arrange(condition_i) %>%
-      pull(condition_name)
-
-    ## (Unnormalized) Nhoods counts matrix, how do the query conditions
-    ## distribute over the neighbourhoods?
-    ## Dimensions: [query experimental conditions x Nhoods]
-    if (F) {
-      SummarizedExperiment::colData(sce)$condition_i <-
-        factor(SummarizedExperiment::colData(sce)$condition_i,
-          levels = sort(unique(SummarizedExperiment::colData(sce)$condition_i)))
-      sce <-
-        countCells(
-          sce,
-          meta.data = data.frame(SummarizedExperiment::colData(sce)),
-          samples = c('condition_i')
-          # samples = c('stim_group')
-        )
-      UCM <- t(as.matrix(nhoodCounts(sce)))
-      rownames(UCM) <- query_cn
-      # nhoodCounts(sce)
-      # UCM <- UCM[match(1:nrow(UCM), as.integer(rownames(UCM))), ]
-      # dn <- dimnames(UCM)
-    } else {
-      UCM <-
-        query_dtf %>%
-        dplyr::select(matches('^CN\\d+$')) %>%
-        as.matrix() %>%
-        t()
-    }
-
-    if (!is.null(min_Nhood_size) && min_Nhood_size > 0) {
-      valid_Nhoods <- which(colSums(UCM) >= min_Nhood_size)
-      UCM <- UCM[, valid_Nhoods, drop = F]
-    } else {
-      valid_Nhoods <- 1:ncol(UCM)
-    }
-
-    sel_Nhood_names <- colnames(nhoods(self$sce))[valid_Nhoods]
-    if (frac_included_cells(self$sce, sel_Nhood_names) <= .025) {
-      self$agg_error <- NULL
-      return(NULL)
-    }
-
-    ## Normalized counts matrix, scale the rows (each condition sums
-    ## to 1)
-    CM <- tryCatch(diag(1/rowSums(UCM)) %*% UCM,
-      error = function(e) { print(e) })
-
-    if (scale_by_max_aff) {
-      max_aff_n <- self$max_aff[valid_Nhoods] /
-        sum(self$max_aff[valid_Nhoods])
-      CM <- CM %*% diag(max_aff_n)
-      CM <- diag(1/rowSums(CM)) %*% CM
-      stopifnot(rowSums(CM) - 1 < 1e-9)
-    }
-
-    ## Get distance matrix, which stores how close (in latent space)
-    ## SC query Nhoods are to reference conditions
-    DM <- self$distM
-    dn <- dimnames(DM)
-
-    ## Potentially modulate distance matrix
-    if (ref_weights == 'uniqueness') {
-      ref_factors <- compute_USF(self$ref_M)
-      stopifnot(colnames(DM) == names(ref_factors))
-      dn <- dimnames(DM)
-      DM <- DM %*% diag(ref_factors)
-      dimnames(DM) <- dn
-    }
-
-    if (ref_weights == 'ref_reconstruction') {
-      if (maartenutils::null_dat(self$ref_reconstruction)) {
-        rlang::warn('No ref_reconstruction found')
-        return(NULL)
-      }
-      ref_factors <- self$ref_reconstruction
-      ref_factors <-
-        tibble(condition_name = colnames(DM)) %>%
-        dplyr::left_join(ref_factors, by = 'condition_name') %>%
-        dplyr::mutate(recon_f = ifelse(is.na(recon_f), 1, recon_f))
-      stopifnot(ref_factors$condition_name == colnames(DM))
-      DM <- DM %*% diag(ref_factors$recon_f)
-      dimnames(DM) <- dn
-    }
-
-    ## Compute Nhood to experimental ref affinity using (scaled) distances
-    affM <- self$compute_affM(distM = DM, ltb = ltb)
-
-    ## Weights matrix, how affine is each query condition to each ref
-    ## condition? Marginalize the Nhoods out:
-    ## [ref experimental conditions x Nhoods] times
-    ## [Nhoods x query experimental conditions]
-    WM <- CM %*% affM[valid_Nhoods, ]
-    if (F) {
-      apply(CM, 1, sum)
-      apply(CM, 1, max)
-      apply(CM, 2, sum)
-      apply(affM[valid_Nhoods, ], 2, sum)
-    }
-    ltb_retained_Nhoods <-
-      1-mean(apply(affM[valid_Nhoods, ], 1, sum) == 0)
-    rownames(WM) <- query_cn
-    WM_1 <- (rowSums(WM) - 1) < 1e-2
-    # if (any(!WM_1, na.rm = T) && interactive()) {
-    # browser(expr = any(!WM_1, na.rm = T))
-    if (!all(WM_1, na.rm = T) || any(!WM_1, na.rm = T)) { browser() }
-    stopifnot(all(WM_1, na.rm = T))
-
-    if (verbose) {
-      setNames(1:nrow(WM), rownames(WM)) %>%
-        map(~sort(WM[.x, ]) %>% { .[length(.)] }) %>%
-        print()
-    }
-
-    ref_sa <-
-      extract_sa(ref_dtf, meta_fields = reg_vars) %>%
-      numerify_regressors() %>%
-      add_binary_regressors(regressor_vars = reg_vars) %>%
-      norm_regressors() %>%
-      dplyr::select(-any_of(c('duration_bin'))) %>%
-      as.matrix() %>%
-      { . }
-    match_col <- find_match_col(colnames(WM), dtf = ref_dtf)
-    idxs <- match(colnames(WM), ref_dtf[[match_col]])
-    ref_sa <- ref_sa[idxs, ]
-
-    ## Mean prediction matrix
-    PM <-
-      { WM %*% as.matrix(ref_sa) } %>%
-      set_rownames(query_cn)
-
-    ## Does the CI include zero?
-    IZM <- matrix(nrow = nrow(WM), ncol = ncol(ref_sa))
-    CI_l <- matrix(nrow = nrow(WM), ncol = ncol(ref_sa))
-    CI_h <- matrix(nrow = nrow(WM), ncol = ncol(ref_sa))
-    for (i in 1:nrow(IZM)) {
-      for (j in 1:ncol(IZM)) {
-        if (!any(WM[i, ] > 0, na.rm = T)) {
-          CI_l[i, j] <- NA_real_
-          CI_h[i, j] <- NA_real_
-          IZM[i, j] <- NA
-        } else {
-          CI <- weighted_t_ci(ref_sa[, j], weights = WM[i, ])
-          CI_l[i, j] <- CI[1]
-          CI_h[i, j] <- CI[2]
-          IZM[i, j] <- CI[1] <= 0 && CI[2] >= 0
-        }
-      }
-    }
-    dimnames(IZM) <- dimnames(PM)
-    dimnames(CI_l) <- dimnames(PM)
-    dimnames(CI_h) <- dimnames(PM)
-
-    out <- list('CM' = CM, 'WM' = WM, 'PM' = PM, 'IZM' = IZM)
-
-    if (!is.null(reg_vars)) {
-      ## Penalty matrices, storing the penalty for each query condition to
-      ## each reference condition
-      penalty_Ms <-
-        purrr::map(auto_name(reg_vars), function(rv) {
-          if (is.null(query_sa[[rv]])) return(NULL)
-          t(outer(ref_sa[, rv], query_sa[[rv]], '-'))
-        }) %>%
-        purrr::discard(is.null)
-
-      ## Observed error matrix, Hadamard multiplication of errors and
-      ## weights
-      EM <-
-        purrr::map_dfc(penalty_Ms, function(pM) {
-          { WM * abs(pM) } %>%
-            rowSums(na.rm = F)
-          }) %>%
-        as.matrix() %>%
-        set_rownames(query_cn)
-
-      # penalty_Ms_bin <- map(penalty_Ms, ~
-      #   matrix(as.numeric(.x > 0), nrow = nrow(.x), ncol = ncol(.x))
-      # )
-      iz_vars <- intersect(reg_vars, colnames(IZM))
-      IZ <- IZM[, reg_vars] == (!query_sa[, reg_vars])
-
-      out <- c(out, list('EM' = EM, 'IZ' = IZ))
-    }
-
-    ## Lower bound prediction
-    # WM %*% as.matrix(ref_sa)
-
-    ## Point wise prediction
-    # PWP <- matrix()
-
-    ## Neighbourhood level prediction
-    # AM %*% ref_sa
-    # cumsum(sort(AM[1, ]))
-
-    if (include_bs_pres) {
-      ## Bootstrap resampled sample annotation for each row in AM
-      ## (i.e. each neighbourhood)
-      pred_sa <- resim_pmf(AM, sa = ref_sa, N_draws = colSums(UCM))
-
-      ## Summarize the resampled sample annotation
-      pred_sum <-
-        pred_sa %>%
-        # { .[1:3] } %>%
-        imap_dfr(function(.x, i) {
-          out <- purrr::map_dfr(1:ncol(.x), function(j) {
-            tibble(
-              i = rep(i, 3),
-              rv = rep(colnames(.x)[j], 3),
-              var = c('q1', 'q5', 'q9'),
-              value = quantile(.x[, j], probs = c(.1, .5, .9), na.rm = T)
-            )
-          })
-          return(out)
-        })
-      out[['pred_sum']] <- pred_sum
-    }
-
-    self$agg_error <- out
-  },
-
-  compute_Nhood_stats = function(min_Nhood_size = 0) {
+    compute_Nhood_stats = function(min_Nhood_size = 0) {
     ## Column, rows
     nearest_ref_idxs <-
       cbind(apply(self$distM, 1, which.min), 1:nrow(self$distM))
@@ -554,25 +267,6 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
     self$NN_probs <-
       NN_probs %>% dplyr::right_join(gamma_stats, by = 'ltb')
   },
-
-    ## Deprecated funcs
-
-  # compute_affM_tree = function() {
-  #   ## Default settings of ComplexHeatmap
-  #   self$affM_tree <-
-  #     dist(t(self$affM), method = 'euclidean') %>%
-  #     hclust(method = 'complete')
-
-  #   ## Cluster_assignments
-  #   self$tree_cut <- cutree(
-  #     self$distM_tree,
-  #     h = ifelse(self$cluster_h_q > 0,
-  #       quantile(self$distM_tree$height, self$cluster_h_q),
-  #       0)
-  #   )
-  #   dend <- as.dendrogram(self$distM_tree)
-  #   self$ind = self$tree_cut[order.dendrogram(dend)]
-  # },
 
   overlay_cluster_cuts = function(heatmap_name) {
     decorate_column_dend(
@@ -1029,183 +723,6 @@ NhoodRefSim <- R6::R6Class('NhoodRefSim',
   )
 )
 
-
-
-#' 
-#'
-#' @export
-plot_prediction_error_mat.NhoodRefSim <- function(obj,
-  plot_id = '', out_dir = Sys.getenv('img_dir')) {
-
-  stopifnot(!is.null(obj$agg_error))
-  EM <- obj$agg_error$EM
-  IZ <- obj$agg_error$IZ %>%
-    { .[, colnames(.) != 'duration'] }
-  IZ_n <- IZ
-  IZ_n[IZ == F] <- 1.0
-  IZ_n[IZ == T] <- 0.0
-  colnames(IZ_n) <- paste0(colnames(IZ_n), '_bin')
-
-
-  obj <- SummarizedExperiment::SummarizedExperiment(
-    assays = list(mean = cbind(EM, IZ_n)),
-    rowData = extract_sa(
-      as.data.frame(SummarizedExperiment::colData(obj$sce)),
-      meta_fields = c('condition_i', 'stim_group', 'duration',
-        'frozen')) %>%
-    set_rownames(NULL) %>%
-    dplyr::distinct() %>%
-    dplyr::arrange(condition_i) %>%
-    dplyr::select(-condition_i) %>%
-    set_rownames(rownames(.)) %>%
-    { . }
-  )
-
-  plot_prediction_error_mat(obj, plot_id = plot_id, out_dir = out_dir)
-}
-
-
-#' 
-#'
-#' @export
-plot_ref_mds.NhoodRefSim <- function(
-  obj, out_dir = get_out_dir(obj), plot_id = get_plot_id(obj),
-  include_query = F) {
-
-  if (!include_query) {
-    fit <- cmdscale(dist(obj$ref_M))
-    sa <- obj$ref_sa %>%
-      recover_stim_group()
-    exp_v <- rep(obj$ref_experiment, nrow(obj$ref_M))
-  } else {
-    fit <- cmdscale(dist(rbind(obj$ref_M, obj$query_M)))
-    ref_sa <- obj$ref_sa %>%
-      recover_stim_group()
-
-    query_sa <-
-      obj$dtf %>%
-      dplyr::filter(experiment == obj$query) %>%
-      dplyr::select(any_of(colnames(ref_sa)), any_of(c('N')),
-        matches('weight|_N'))
-    # query_sa <-
-    #   SummarizedExperiment::colData(obj$sce) %>%
-    #   as.data.frame() %>%
-    #   set_rownames(NULL) %>%
-    #   extract_sa(meta_fields = c(colnames(ref_sa), 'condition_i')) %>%
-    #   { . }
-
-    exp_v <- c(
-      rep(obj$ref_experiment, nrow(obj$ref_M)),
-      rep(obj$query, nrow(obj$query_M))
-    )
-
-    sa <- harmonize_bind_rows(ref_sa, query_sa)
-  }
-
-  p_dat <-
-    tibble(
-      CMD1 = fit[, 1], CMD2 = fit[, 2],
-      experiment = exp_v
-    ) %>%
-    dplyr::bind_cols(sa) %>%
-    dplyr::mutate(tnf_conc = factor(tnf_conc)) %>%
-    dplyr::mutate(ifn_conc = factor(ifn_conc))
-
-  p1 <-
-    p_dat %>%
-    dplyr::filter(experiment == obj$ref_experiment) %>%
-    plot_dim_reduc(
-      coord_regex = '^CMD',
-      colour_var = 'ifn_conc'
-    ) +
-    ggtitle('IFNy') +
-    theme(
-      legend.direction = 'vertical',
-      legend.position = 'right'
-    )
-
-  p2 <-
-    p_dat %>%
-    dplyr::filter(experiment == obj$ref_experiment) %>%
-    plot_dim_reduc(
-      coord_regex = '^CMD',
-      colour_var = 'tnf_conc'
-    ) +
-    theme(
-      legend.direction = 'vertical',
-      legend.position = 'right'
-    ) +
-    ggtitle('TNFa') +
-    guides(shape = 'none')
-
-  if (!include_query) {
-    print_plot_eval(
-      print(p1 + p2 + plot_layout(guides = 'auto')),
-      width = 17.4, height = 10,
-      filename = file.path(out_dir,
-        glue::glue('mds{prepend_hyphen(plot_id)}.pdf')))
-  } else {
-    p3 <-
-      p_dat %>%
-      # dplyr::filter(experiment != obj$ref_experiment) %>%
-      plot_dim_reduc(
-        coord_regex = '^CMD',
-        filter_samples = !experiment %in% c('6434', '5029-6434'),
-        ordering_code =
-          rlang::expr({fg_dtf <- dplyr::arrange(fg_dtf, N)}),
-        colour_var = 'N'
-      ) +
-      theme(
-        legend.direction = 'horizontal',
-        legend.position = 'bottom'
-      ) +
-      guides(color = guide_colourbar()) +
-      scale_colour_viridis_c() +
-      ggtitle('Nhood size') +
-      guides(shape = 'none')
-    p31 <-
-      p_dat %>%
-      # dplyr::filter(experiment != obj$ref_experiment) %>%
-      plot_dim_reduc(
-        coord_regex = '^CMD',
-        filter_samples = !experiment %in% c('6434', '5029-6434'),
-        ordering_code =
-          rlang::expr({fg_dtf <- dplyr::arrange(fg_dtf, Nhood_bandwidth_weights)}),
-        colour_var = 'Nhood_bandwidth_weights'
-      ) +
-      theme(
-        legend.direction = 'horizontal',
-        legend.position = 'bottom'
-      ) +
-      guides(color = guide_colourbar()) +
-      scale_colour_viridis_c() +
-      ggtitle('Bandwidth weight') +
-      guides(shape = 'none')
-    p4 <-
-      p_dat %>%
-      plot_dim_reduc(
-        coord_regex = '^CMD',
-        filter_samples = !experiment %in% c('6434', '5029-6434'),
-        ordering_code =
-          rlang::expr({fg_dtf <- dplyr::arrange(fg_dtf, Nhood_importance_weights)}),
-        colour_var = 'Nhood_importance_weights'
-      ) +
-      theme(
-        legend.direction = 'horizontal',
-        legend.position = 'bottom'
-      ) +
-      guides(color = guide_colourbar()) +
-      scale_colour_viridis_c() +
-      ggtitle('Total weight') +
-      guides(shape = 'none')
-    print_plot_eval(
-      print((p1 + p2) / (p3 + p31 + p4) + plot_layout(guides = 'auto')),
-      width = 17.4, height = 20,
-      filename = file.path(out_dir,
-        glue::glue('mds{prepend_hyphen(plot_id)}.pdf')))
-  }
-
-}
 
 
 #' Simplify a collection of reference samples using Euclidean distance

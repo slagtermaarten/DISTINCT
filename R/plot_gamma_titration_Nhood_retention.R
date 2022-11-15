@@ -81,7 +81,7 @@ plot_gamma_titration_Nhood_retention.NhoodRefSim <-
 #' @export
 plot_gamma_titration_Nhood_retention.DISTINCT <- function(obj, ...) {
   nrs <- as_nrs(obj)
-  nrs$agg_Nhood_error()
+  nrs$compute_error()
   dots <- list(...)
   if (is.null(dots$out_dir)) {
     dots$out_dir <- get_out_dir(obj)

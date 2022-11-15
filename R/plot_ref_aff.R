@@ -9,7 +9,7 @@ plot_ref_aff <- function(...) UseMethod('plot_ref_aff')
 #' @export
 plot_ref_aff.DISTINCT <- function(obj, ...) {
   nrs <- as_nrs(obj)
-  nrs$agg_Nhood_error()
+  nrs$agg_error <- compute_error(nrs)
   dots <- list(...)
   if (is.null(dots$out_dir)) {
     dots$out_dir <- get_out_dir(obj)
@@ -18,7 +18,6 @@ plot_ref_aff.DISTINCT <- function(obj, ...) {
   if (is.null(dots$plot_id)) {
     dots$plot_id <- get_plot_id(obj)
   }
-
   do.call(plot_ref_aff, c(list('obj' = nrs), dots))
 }
 
